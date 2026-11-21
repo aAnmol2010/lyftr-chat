@@ -78,8 +78,6 @@ Compose and the example environment enable failure simulation for evaluation. A 
 
 Run the backend suite with `cd backend && uv sync --frozen && uv run pytest -q`. The routing tests need localhost sockets. In `frontend/`, run `npm ci && npm run build && npx playwright install chromium && npm test`. Set `STACK_URL` to the running frontend origin to include the full-stack browser check. Alternatively point `CHROME_PATH` at a local Chromium or Chrome executable.
 
-The [2–3 minute recording walkthrough](docs/demo-recording.md) includes the screen sequence, suggested narration, and terminal commands for demonstrating cache reuse, key fallback and unchanged history after a 503.
-
 ## Setup Used: your editor and AI tools
 
 Codex desktop with the Superpowers workflow for planning, implementation and independent review. The project uses uv for the Python lockfile, npm for frontend dependencies, and Docker Compose for local integration.
