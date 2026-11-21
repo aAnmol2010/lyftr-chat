@@ -4,7 +4,9 @@ A React chat client backed by FastAPI, Gemini through LiteLLM, and persistent SQ
 
 ## Live URLs
 
-The [public source repository](https://github.com/aAnmol2010/lyftr-chat) contains the application and tests. Public frontend, backend and demo links are pending deployment. The local frontend defaults to [localhost:3000](http://localhost:3000) and backend readiness is available at [localhost:8000/health](http://localhost:8000/health).
+- [Live chat on Render](https://lyftr-chat-dc7y.onrender.com/)
+- [Railway API](https://lyftr-chat-lyftr-chat1.up.railway.app) and [health check](https://lyftr-chat-lyftr-chat1.up.railway.app/health)
+- [Public GitHub repository](https://github.com/aAnmol2010/lyftr-chat)
 
 For deployment, build the backend using `backend/` as the Docker context. Run one replica with a writable persistent disk at `/data`, both credentials in the service's secret store, `DATABASE_URL=sqlite:////data/app.db`, `ENABLE_FAILURE_SIMULATION=true`, and `ALLOWED_ORIGINS` set to the frontend HTTPS origin. The container honors the host's `PORT`. Its entrypoint sets ownership of the mounted /data directory, then runs the service as UID 10001. On a platform that enforces a non-root entrypoint, provision the disk writable by that UID. Verify history survives a restart on the selected host. Build the frontend using `frontend/` as the root, `npm ci && npm run build`, output directory `dist`, and the public HTTPS backend origin in `VITE_API_BASE_URL`. Rebuild after changing that variable. Verify the two services, the GitHub repository and the narrated video while signed out.
 
