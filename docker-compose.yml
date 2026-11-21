@@ -1,0 +1,24 @@
+services:
+  backend:
+    build: ./backend
+    environment:
+      LLM_API_KEYS: ${LLM_API_KEYS:-}
+      LLM_MODEL: ${LLM_MODEL:-gemini/gemini-3.5-flash-lite}
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/app.db}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      ENABLE_FAILURE_SIMULATION: ${ENABLE_FAILURE_SIMULATION:-true}
+      MAX_HISTORY_TURNS: ${MAX_HISTORY_TURNS:-20}
+      DEFAULT_SYSTEM_PROMPT: ${DEFAULT_SYSTEM_PROMPT:-You are a helpful assistant. Answer clearly and concisely.}
+    volumes:
+      - chat_history:/data
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:8080"
+volumes:
+  chat_history:

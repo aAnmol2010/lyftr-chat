@@ -1,0 +1,13 @@
+[project]
+name = "lyftr-chat"
+version = "1.0.0"
+requires-python = ">=3.12,<3.14"
+dependencies = ["fastapi", "uvicorn", "litellm", "httpx"]
+
+[dependency-groups]
+dev = ["pytest", "pytest-asyncio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+asyncio_default_fixture_loop_scope = "function"

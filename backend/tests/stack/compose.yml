@@ -1,0 +1,16 @@
+# Test overlay: all bind paths are relative to the root docker-compose.yml.
+services:
+  provider:
+    image: python:3.12-slim
+    command: python /test/provider.py
+    volumes:
+      - ./backend/tests/stack:/test:ro
+  backend:
+    environment:
+      LLM_API_KEYS: test-first,test-second
+      LLM_MODEL: gemini/gemini-2.5-flash-lite
+      DATABASE_URL: sqlite:////data/app.db
+      PYTHONPATH: /srv:/test
+    volumes:
+      - ./backend/tests/stack:/test:ro
+    command: uvicorn bootstrap:app --factory --host 0.0.0.0 --port 8000
