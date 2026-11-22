@@ -1,29 +1,42 @@
 # Lyftr Chat
 
-A React chat client backed by FastAPI, Gemini through LiteLLM, and persistent SQLite history. Each reply shows its source, model, latency and input/output token counts.
+A multi-turn Gemini chat that keeps responding when an API key hits its quota. Each reply shows whether it came from Gemini or the cache, which model produced it, how long the request took, and how many tokens it used.
+
+Built with React, FastAPI, LiteLLM, and SQLite for the Lyftr AI full-stack assignment.
 
 ## Live URLs
 
-- [Live chat on Render](https://lyftr-chat-dc7y.onrender.com/)
-- [Railway API](https://lyftr-chat-lyftr-chat1.up.railway.app) and [health check](https://lyftr-chat-lyftr-chat1.up.railway.app/health)
-- [Public GitHub repository](https://github.com/aAnmol2010/lyftr-chat)
+| Open | What to look for |
+| --- | --- |
+| [Chat app on Render](https://lyftr-chat-dc7y.onrender.com/) | Send a message and inspect the metadata below the reply. |
+| [Backend on Railway](https://lyftr-chat-lyftr-chat1.up.railway.app) · [Health check](https://lyftr-chat-lyftr-chat1.up.railway.app/health) | The health response shows two configured keys and an enabled cache. |
 
-For deployment, build the backend using `backend/` as the Docker context. Run one replica with a writable persistent disk at `/data`, both credentials in the service's secret store, `DATABASE_URL=sqlite:////data/app.db`, `ENABLE_FAILURE_SIMULATION=true`, and `ALLOWED_ORIGINS` set to the frontend HTTPS origin. The container honors the host's `PORT`. Its entrypoint sets ownership of the mounted /data directory, then runs the service as UID 10001. On a platform that enforces a non-root entrypoint, provision the disk writable by that UID. Verify history survives a restart on the selected host. Build the frontend using `frontend/` as the root, `npm ci && npm run build`, output directory `dist`, and the public HTTPS backend origin in `VITE_API_BASE_URL`. Rebuild after changing that variable. Verify the two services, the GitHub repository and the narrated video while signed out.
+1. **Try conversation context.** Send `Remember my project name is Atlas-742. Reply with its name.` Use a fresh name for each run. The first reply should show `LIVE_INFERENCE`. Ask `What name did I give you?` in the same chat.
+2. **Try the cache.** Refresh to start a new session, then send the exact opening message with the same system prompt. Look for `LLM_CACHE`, matching text and token counts, and a lower latency.
+
+The hosted backend runs one worker with a persistent volume at `/data`. Render builds the frontend with the Railway URL in `VITE_API_BASE_URL`. The backend permits the Render origin through `ALLOWED_ORIGINS`.
 
 ## Run locally: with Docker and without
 
-**Docker.** Install Docker Compose and Make. From the repository root:
+### Docker Compose
+
+Install Docker with Compose and Make. From the repository root, create your environment file if you don't already have one.
 
 ```sh
 test -f .env || cp .env.example .env
+```
+
+Set `LLM_API_KEYS` in `.env` to two distinct Gemini keys separated by a comma. Both keys must have access to `LLM_MODEL`. Keep the keys in the backend environment. The default model is `gemini/gemini-3.5-flash-lite`.
+
+```sh
 make up
 ```
 
-Add two distinct working Gemini credentials to the ignored `.env` as `LLM_API_KEYS=first,second`. Run `make up` again after editing. The frontend and history endpoint can start with no keys. Readiness and chat return JSON 503 until the pool is configured. The configurable default is `gemini/gemini-3.5-flash-lite`. Check access to the selected model for both credentials.
+Open the [local chat](http://localhost:3000) and [backend health check](http://localhost:8000/health). Run `make down` to stop the stack. The named volume preserves the SQLite database.
 
-Use `make down` to stop. The named volume preserves history. If port 3000 is occupied, set `FRONTEND_PORT=3100` and `ALLOWED_ORIGINS=http://localhost:3100` together.
+### Without Docker
 
-**Native.** Install Python 3.12, uv, Node 22 and npm. Copy the environment example as above. In one terminal, from the repository root:
+Install Python 3.12, uv, Node.js 22, and npm. Use the same `.env` setup. From the repository root, start the backend in one terminal.
 
 ```sh
 set -a
@@ -35,7 +48,7 @@ uv sync --frozen
 uv run uvicorn app.main:create_app --factory --port 8000
 ```
 
-In a second terminal:
+Start the frontend in a second terminal, also from the repository root.
 
 ```sh
 cd frontend
@@ -43,45 +56,83 @@ npm ci
 npm run dev
 ```
 
-**Credential-free integration stack.** This test overlay supplies a local Gemini-compatible HTTP service with a clearly labeled fixture reply and test usage values. The production image and ordinary Compose configuration use Gemini. From the repository root:
-
-```sh
-make demo
-python3 scripts/verify_live.py http://localhost:8100
-```
-
-Open [the fixture-backed chat](http://localhost:3100). The verifier prints a session ID. Run `make demo-down` then `make demo`, wait for readiness, and fetch `http://localhost:8100/sessions/<id>/messages` to see the original conversation after recreation. This separate project uses its own SQLite volume. `make demo-down` stops it.
+See [.env.example](.env.example) for the supported settings and defaults. For hosted Docker deployments, mount writable storage at `/data` and set `DATABASE_URL=sqlite:////data/app.db`. The backend listens on the hosting platform's `PORT` when provided.
 
 ## Design decisions: key fallback, caching, SQLite session storage
 
-- Each key receives a stable positional alias. The embedded LiteLLM Router follows an ordered fallback list, with no same-key retries and a bounded request deadline. A successful response reports the serving alias and the number of earlier failed attempts. When all deployments fail, the API returns 503.
-- The failure header selects dedicated error deployments for that request only. The surviving aliases use the usual provider transport. Simulated calls bypass cache reads and writes, so a warm reply cannot mask exhaustion.
-- LiteLLM's built-in local cache stores validated reply text and per-request usage under the provider-qualified model and full ordered roles and content. Equivalent conversations can reuse an answer across sessions. Hits retain the original usage and measure fresh latency. Entries expire after 600 seconds, can be evicted at the pinned SDK’s 200-entry capacity, and disappear on backend restart. The gateway calls LiteLLM’s built-in cache directly so it can skip both lookup and storage during failure simulation and cache only validated responses. Two identical cold requests arriving together can both reach the provider.
-- An async lock orders turns in each session. The model receives the most recent 20 complete turns by default (configure MAX_HISTORY_TURNS), followed by the new message. SQLite retains the full transcript for the history endpoint. Reads and writes during chat run off the event loop. A short SQLite transaction commits the prompt change, user message, assistant reply and metadata together after inference. SQLite write-ahead logging and a named disk volume support local persistence. Session IDs are bearer-like identifiers for this public demo. Use generated IDs and nonsensitive prompts.
+```mermaid
+flowchart LR
+    UI["React chat"] -->|"Session ID and new message"| API["FastAPI"]
+    API <-->|"Read history and commit turns"| DB[("SQLite on /data")]
+    API <-->|"Model and ordered messages"| Cache["LiteLLM in-memory cache"]
+    API -->|"Cache miss or simulated failure"| Router["LiteLLM Router"]
+    Router -->|"First attempt"| Key1["Gemini key 1"]
+    Router -->|"On provider failure"| Key2["Gemini key 2"]
+```
+
+- **Ordered failover.** LiteLLM tries keys in configuration order with a bounded deadline. The API reports the serving alias, such as `key_2`, and the fallback count. If every key fails, the API returns a JSON `503`.
+- **Cache identity.** The key combines the model with the ordered system prompt, history, and new message. Equivalent requests can share a cached reply across sessions. Hits preserve the original token counts and measure latency again.
+- **Cache lifetime.** The in-memory cache expires entries after 10 minutes and clears on backend restart. Failure simulation bypasses cache lookup and storage so each simulated request exercises the router.
+- **Durable conversation history.** FastAPI serializes turns within a session. It commits the user message, reply, metadata, and prompt update together after a successful completion. SQLite retains the full transcript across restarts.
+- **Bounded model context.** By default, Gemini sees up to the latest 20 complete turns, the system prompt, and the new message. The browser sends only the session ID, new message, and any changed system prompt.
 
 ## Verification: how to see failover, cache hits and per-message token usage
 
-Run `python3 scripts/verify_live.py <backend-url>` against a configured backend. It makes inference requests, verifies all three endpoints, and checks clean 422/503 errors and unchanged history. A new run uses a unique prompt. Replace `<backend-url>` with the actual origin.
-
-In the browser, send an opening message and a follow-up. Each assistant reply has its own usage and latency. Reload and send the same opening message with the same system prompt to see `LLM_CACHE`. Use a unique opening message for a cold demonstration.
+### Run the live verifier
 
 ```sh
-curl -s http://localhost:8000/health
-curl -s http://localhost:8000/chat -H 'Content-Type: application/json' \
-  -H 'X-Simulate-Failure: key_1=429' -d '{"session_id":"demo","message":"Say hello"}'
-curl -s http://localhost:8000/sessions/demo/messages
+python3 scripts/verify_live.py https://lyftr-chat-lyftr-chat1.up.railway.app
 ```
 
-A healthy second key returns a real reply, `key_id=key_2` and `fallback_attempts=1`. Replace the header value with `*=429` to get the exact 503 detail. The header accepts 429, 500, 502 and 503. With simulation disabled it is ignored.
+The verifier exercises all three endpoints with a fresh prompt. It checks live inference, a cache hit in a separate session, token counts, both failover scenarios, history, and JSON errors. It prints the session ID for an independent history check.
 
-Compose and the example environment enable failure simulation for evaluation. A native run with the variable unset disables it. The public chat endpoint has no authentication or application-level rate limit. Configure provider spending limits and host-level request limits before opening it to public traffic.
+### Inspect the API manually
 
-Run the backend suite with `cd backend && uv sync --frozen && uv run pytest -q`. The routing tests need localhost sockets. In `frontend/`, run `npm ci && npm run build && npx playwright install chromium && npm test`. Set `STACK_URL` to the running frontend origin to include the full-stack browser check. Alternatively point `CHROME_PATH` at a local Chromium or Chrome executable.
+```sh
+API=https://lyftr-chat-lyftr-chat1.up.railway.app
+SID="review-$(date +%s)"
+
+curl -fsS "$API/health"
+
+curl -fsS "$API/chat" -H 'Content-Type: application/json' \
+  -H 'X-Simulate-Failure: key_1=429' \
+  --data "{\"session_id\":\"$SID\",\"message\":\"Greet me in one sentence.\"}"
+
+curl -fsS "$API/sessions/$SID/messages"
+```
+
+| Check | Expected result |
+| --- | --- |
+| Send the same first message in a fresh session | `LLM_CACHE`, matching reply and token counts, `key_id: null`, and faster latency. |
+| Send `X-Simulate-Failure: key_1=429` or `key_1=500` | HTTP `200`, a Gemini reply, `key_id: "key_2"`, and `fallback_attempts: 1`. |
+| Send `X-Simulate-Failure: *=429` | HTTP `503` with `{"detail":"all providers unavailable"}`. History stays unchanged. |
+| Read the same session after a backend restart | The history endpoint returns the same message content and metadata. |
+
+`ENABLE_FAILURE_SIMULATION=true` enables the header on the deployed backend. A simulated failure applies only to that request.
+
+### Run the tests
+
+| Suite | Command |
+| --- | --- |
+| Backend API, routing, and SQLite | In `backend/`, run `uv sync --frozen && uv run pytest -q`. |
+| Frontend build and browser tests | In `frontend/`, run `npm ci && npm run build && npx playwright install chromium && npm test`. |
+| Browser test against a running stack | In `frontend/`, run `STACK_URL=http://localhost:3000 npm test` after starting the configured stack. |
 
 ## Setup Used: your editor and AI tools
 
-Codex desktop with the Superpowers workflow for planning, implementation and independent review. The project uses uv for the Python lockfile, npm for frontend dependencies, and Docker Compose for local integration.
+I used Codex desktop with Superpowers for planning, implementation, and review. I verified the public deployment with real Gemini calls, browser cache replay, and a SQLite history comparison before and after a Railway restart.
 
 ## Bonus features (if any): what you added beyond the requirements and why
 
-The optional session prompt accepts up to 4000 characters after trimming. Clearing it restores the configured default on the next successful turn. Failed sends retain the draft for an explicit retry. The credential-free test overlay lets reviewers exercise the transport, router, cache, database and browser together before configuring provider access.
+- **Editable session prompt.** Reviewers can change the assistant's behavior for a conversation. Clearing the prompt restores the default on the next successful turn.
+- **Retryable drafts.** A failed send restores the message to the composer so the user can retry or correct it.
+- **Credential-free demo.** A separate Compose stack runs the app against a local Gemini-compatible test provider. It uses a dedicated database and deterministic responses for checking the integration without Gemini keys.
+
+```sh
+make demo
+curl --connect-timeout 2 --retry 12 --retry-connrefused --retry-delay 1 -fsS \
+  http://localhost:8100/health
+python3 scripts/verify_live.py http://localhost:8100
+```
+
+Open the [local test chat](http://localhost:3100) or run `make demo-down` to stop the demo.
